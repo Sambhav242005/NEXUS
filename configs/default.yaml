@@ -1,0 +1,8 @@
+max_steps: 10
+tool_timeout_seconds: 30
+debug: false
+computer_use_enabled: false
+voice:
+  silence_timeout: 1.0
+  max_duration: 60
+  speech_threshold: 500

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv*/
+venv/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.pytest-temp/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts (recordings, screenshots, logs)
+recordings/
+*.log
+*.wav
+*.png.tmp
+.nexus-last-screen.png
+
+# Test scratch
+hello.txt
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

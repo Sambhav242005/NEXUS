@@ -1,0 +1,6 @@
+models:
+  intent: {provider: ollama, name: "minicpm-v4.6", think: false, device: cpu}
+  semif: {provider: semif, model: Qwen/Qwen3.5-4B, revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a, backend: mock}
+  asr: {provider: whisper, model: "openai/whisper-large-v3-turbo", device: cuda}
+  tts: {provider: kittentts, model: "KittenML/kitten-tts-mini-0.8", voice: Jasper, speed: 1.0, device: cpu}
+  vision: {provider: uia, model: none}

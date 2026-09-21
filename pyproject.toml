@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus"
+version = "0.1.0"
+description = "NEXUS — local voice + computer-use agent (SemIf-gated)"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.0",
+  "pyyaml>=6.0",
+  "Pillow>=10.0",
+]
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+computer = ["pywinauto>=0.6.9"]
+voice = [
+  "numpy>=1.26",
+  "sounddevice>=0.5",
+  "soundfile>=0.12",
+  "transformers>=4.45",
+  "torch>=2.0",
+]
+voice-kitten = [
+  "kittentts @ https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
