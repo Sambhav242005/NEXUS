@@ -79,7 +79,20 @@ models:
 Paths / settings via env or YAML. No hardcoded secrets or model paths.
 Configurable GPU/CPU placement. Never load multiple large models to GPU without VRAM check (12GB budget).
 
-## Run (target, not yet implemented)
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Linux
+# .venv\Scripts\activate         # Windows
+python -m pip install -r requirements.txt
+```
+
+Linux voice also needs `sudo apt install libportaudio2`.
+For NVIDIA CUDA torch instead of the default CPU wheel, reinstall
+torch per https://pytorch.org/get-started/local/ afterwards.
+
+## Run
 
 ```powershell
 # text mode (no mic needed, for tests)
@@ -100,6 +113,52 @@ Voice models: STT uses `openai/whisper-large-v3-turbo` with CUDA and CPU fallbac
 of its dependencies does not publish Python 3.13/3.14 wheels. On Python 3.11, install it with
 `python -m pip install -e ".[voice,voice-kitten]"`. The KittenTTS model is downloaded from Hugging Face on first use.
 The model, voice, speed, and device are configurable in `configs/models.yaml`.
+
+Voice providers: `asr.provider` / `tts.provider` switch between local and
+online without code changes — `whisper` (local), `openai` (any
+OpenAI-compatible `/audio/*` endpoint via `base_url` + `OPENAI_API_KEY`),
+`elevenlabs` (native Scribe + TTS via `ELEVENLABS_API_KEY`; TTS needs
+`voice_id`), and `server` (standalone NEXUS voice server at `server_url`).
+See commented examples in `configs/models.yaml`.
+
+Speak-while-busy: speech arriving mid-task is queued FIFO (`max_pending`
+in `configs/default.yaml`, default 5); full queue drops newest with a
+spoken repeat-request. Say `exit`, `quit`, or `stop listening` to end.
+
+Barge-in: talk over a spoken reply (or press Enter) to cut playback and
+record fresh — `voice.barge_in` in `configs/default.yaml`
+(`threshold` 1500 ≈ 3× record level, `min_speech_ms` 300). Best with a
+headset; loud speakers can false-trigger.
+
+Voice on Linux: mic + playback go through sounddevice (PortAudio),
+Enter-stop/barge-in/queue work the same as Windows.
+
+```bash
+sudo apt install libportaudio2
+python -m pip install -e ".[voice]"
+python -m nexus.main --mode voice --config configs/default.yaml
+```
+
+No PortAudio (`OSError`/`PortAudio library not found`) means the apt
+step is missing. KittenTTS needs Python below 3.13; on newer Pythons
+use an online/server TTS provider instead (local Whisper STT works
+anywhere torch runs).
+
+Standalone voice server (separate host OK):
+
+```powershell
+python -m pip install -e ".[server]"
+python -m nexus.voice.server --port 8001
+# agent side: asr/tts provider: server, server_url: http://<host>:8001
+```
+
+Streaming (low-latency barge-in path, same server): `WS /ws/stt` takes
+raw int16 16 kHz mono frames, emits `speech_started` the moment speech
+begins plus auto-finalized `final` transcripts after ~1 s of trailing
+silence (`stop`/`abort` controls, multiple utterances per connection);
+`WS /ws/tts` takes `{"text", "voice"?, "speed"?}` and returns `meta` +
+32 KB audio chunks + `done`. Agent-side clients: `voice/stream.py`
+(`WsSttClient`, `WsTtsClient`).
 
 Voice endpointing checks 100 ms microphone chunks. After speech is detected, one second of silence finalizes
 the utterance. NEXUS transcribes only the finalized WAV; empty transcription is discarded and cannot reach

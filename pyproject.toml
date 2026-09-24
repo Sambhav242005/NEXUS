@@ -25,6 +25,13 @@ voice = [
 voice-kitten = [
   "kittentts @ https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl",
 ]
+server = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "python-multipart>=0.0.9",
+  "websockets>=13",
+]
+decision = ["laya>=0.1.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,14 +1,12 @@
 """NEXUS entrypoint (text mode first, voice later)."""
 from __future__ import annotations
 import argparse
-import msvcrt
 import re
-import time
-from datetime import datetime
 from pathlib import Path
+
 from nexus.config.loader import load_default
 from nexus.semif.adapter import (
-    RealSemIfAdapter, SemIfConfig, SEMIF_AVAILABLE, mock_scorer_nexus, real_direct_scorer,
+    RealSemIfAdapter, SemIfConfig, SEMIF_AVAILABLE, mock_scorer_nexus, real_direct_scorer, laya_scorer,
 )
 from nexus.semif.decisions import TOOL_ROUTING, ACTION_GATING
 from nexus.safety.policy import check_action
@@ -16,7 +14,7 @@ from nexus.computer.schemas import ComputerAction
 from nexus.computer.controller import ComputerController
 from nexus.agent.loop import AutonomousLoop
 from nexus.agent.candidate_planner import SemIfCandidatePlanner
-from nexus.agent.intent import OllamaIntentRouter
+from nexus.agent.intent import build_intent_router
 from nexus.vision.ollama import OllamaVisionProvider
 
 
@@ -138,10 +136,7 @@ def run_autonomous_task(task: str, cfg: dict) -> None:
     intent_cfg = models.get("intent", {})
     controller = ComputerController(cfg.get("workdir", "."), enabled=True)
     semantic_engine = build_semif_engine(semif_cfg)
-    intent_router = OllamaIntentRouter(
-        model=intent_cfg.get("name", "gemma3:1b"),
-        think=bool(intent_cfg.get("think", False)),
-    )
+    intent_router = build_intent_router(models)
     intent_steps = intent_router.plan(task)
     intent = "clarify"
     if intent_steps:
@@ -149,7 +144,7 @@ def run_autonomous_task(task: str, cfg: dict) -> None:
             intent = "shell_task"
         else:
             intent = intent_steps[0].kind
-    print(f"[intent:{intent}] model={intent_cfg.get('name', 'gemma3:1b')}")
+    print(f"[intent:{intent}] provider={intent_cfg.get('provider', 'ollama')} model={intent_cfg.get('name', 'gemma3:1b')}")
     for index, step in enumerate(intent_steps, 1):
         print(f"[intent-step {index}] {step.kind}: {step.value}")
     if (intent == "open_app" or re.search(r"\b(open|launch|start)\b", task, re.I)) and not requests_existing_app(task):
@@ -176,75 +171,39 @@ def run_autonomous_task(task: str, cfg: dict) -> None:
 
 
 def run_voice_task(cfg: dict, autonomous: bool) -> None:
-    """Keep listening, executing one finalized utterance at a time."""
-    import nexus.voice.audio as audio
-    from nexus.voice.tts import KittenSynthesizer
+    """Keep listening; speech during a task is queued, never lost."""
+    from nexus.voice.asr import build_asr
+    from nexus.voice import tts as tts_mod
+    from nexus.voice.audio_loop import VoiceLoop
+    from nexus.voice.schemas import ASRConfig, TTSConfig
 
     models = cfg.get("models", {})
-    asr_cfg = models.get("asr", {})
-    tts_cfg = models.get("tts", {})
-    asr_model = asr_cfg.get("model", "openai/whisper-large-v3-turbo")
-    tts = KittenSynthesizer(
-        model=tts_cfg.get("model", "KittenML/kitten-tts-mini-0.8"),
-        voice=tts_cfg.get("voice", "Jasper"),
-        speed=float(tts_cfg.get("speed", 1.0)),
-    )
-    print("[voice] loading STT model...")
-    audio.preload_transcriber(model=asr_model)
-    print("[voice] loading TTS model...")
-    tts.preload()
-    recordings = Path(cfg.get("workdir", ".")) / "recordings"
+    raw_asr = models.get("asr", {})
+    asr = build_asr(ASRConfig.model_validate(raw_asr))
+    synth = tts_mod.build_tts(TTSConfig.model_validate(models.get("tts", {})))
     voice_cfg = cfg.get("voice", {})
-    recorder = audio.MicRecorder(
-        device=asr_cfg.get("device_index"),
-        silence_timeout=float(voice_cfg.get("silence_timeout", 1.0)),
-        max_duration=float(voice_cfg.get("max_duration", 60.0)),
-        speech_threshold=float(voice_cfg.get("speech_threshold", 500)),
+
+    def on_task(task: str) -> str:
+        try:
+            if autonomous:
+                run_autonomous_task(task, cfg)
+            else:
+                run_task(task, cfg)
+            return "Task processing finished."
+        except Exception as exc:
+            print(f"[voice] task failed: {exc}")
+            return "The task failed."
+
+    loop = VoiceLoop(
+        asr=asr,
+        synth=synth,
+        recordings=Path(cfg.get("workdir", ".")) / "recordings",
+        voice_cfg=voice_cfg,
+        device=raw_asr.get("device_index"),
+        max_pending=int(voice_cfg.get("max_pending", 5)),
+        on_task=on_task,
     )
-    print("[voice] ready; say 'exit' to stop")
-    try:
-        while True:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            wav = recordings / f"voice-{stamp}.wav"
-            print("[voice] recording; speak now; auto-stops after silence (Enter also stops)")
-            recorder.start(wav)
-            try:
-                while recorder.is_recording():
-                    if msvcrt.kbhit():
-                        msvcrt.getwch()
-                        recorder.stop()
-                        break
-                    time.sleep(0.05)
-            finally:
-                if recorder.has_session():
-                    wav = recorder.stop()
-            try:
-                task = audio.transcribe_wav(wav, model=asr_model)
-            except Exception as exc:
-                # One bad capture must not terminate an always-listening
-                # session.  Keep the diagnostic and return to recording.
-                print(f"[voice] transcription failed; listening again: {exc}")
-                continue
-            print(f"[voice] STT device={audio.LAST_DEVICE} text={task!r}")
-            if not task:
-                print("[voice] no speech recognized; listening again")
-                continue
-            if task.strip().lower().rstrip(".!?") in {"exit", "quit", "stop", "stop listening", "goodbye"}:
-                print("[voice] stopping")
-                break
-            try:
-                if autonomous:
-                    run_autonomous_task(task, cfg)
-                else:
-                    run_task(task, cfg)
-                reply = "Task processing finished."
-            except Exception as exc:
-                print(f"[voice] task failed: {exc}")
-                reply = "The task failed."
-            output = recordings / f"voice-{stamp}-reply.wav"
-            tts.speak(reply, output)
-    except KeyboardInterrupt:
-        print("\n[voice] stopping")
+    loop.run()
 
 
 def build_semif_engine(model_cfg: dict):
@@ -256,6 +215,12 @@ def build_semif_engine(model_cfg: dict):
     )
     if config.backend == "mock":
         return RealSemIfAdapter(config, scorer=mock_scorer_nexus)
+    if config.backend == "laya":
+        import laya as _laya
+        agent = _laya.load(config.model)
+        adapter = RealSemIfAdapter(config, scorer=laya_scorer(agent))
+        adapter._loaded_agent = agent
+        return adapter
     if config.backend != "torch-direct":
         raise ValueError(f"unsupported SemIf backend for autonomous loop: {config.backend}")
     from semif_phase1.core import load_causal_model

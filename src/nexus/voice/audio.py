@@ -1,8 +1,14 @@
-"""Windows-only mic capture + playback.
+"""Mic capture + playback + local transcription (Windows + Linux).
 
 Capture: sounddevice (PortAudio) -> 16kHz mono WAV via stdlib wave.
-Playback: stdlib winsound (Windows only) so you hear what was recorded.
-No Linux/macOS support by design (per user request: Windows only).
+Playback: winsound on Windows, sounddevice stream on Linux.
+Linux needs the PortAudio system library plus the voice extra::
+
+    sudo apt install libportaudio2
+    python -m pip install -e ".[voice]"
+
+transcribe_wav/preload_transcriber work on any OS with torch/transformers
+so the standalone voice server can reuse them.
 """
 from __future__ import annotations
 import platform
@@ -11,15 +17,45 @@ import time
 import wave
 from pathlib import Path
 
-if platform.system() != "Windows":
-    raise OSError("nexus.voice.audio is Windows-only")
-
 import numpy as np
+
+
+def is_windows() -> bool:
+    return platform.system() == "Windows"
+
+
+def _sounddevice():
+    """Import sounddevice with an actionable error when PortAudio is missing."""
+    try:
+        import sounddevice as sd
+    except ImportError as exc:
+        raise RuntimeError(
+            "sounddevice is not installed; run: python -m pip install -e \".[voice]\""
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            "PortAudio library not found (sounddevice needs it). "
+            "Linux: sudo apt install libportaudio2. "
+            "Windows: reinstall python from python.org (not the Store)."
+        ) from exc
+    return sd
+
+
+def _read_wav_mono(path: str | Path) -> tuple[np.ndarray, int]:
+    """Read a WAV file as mono int16 samples + sample rate."""
+    with wave.open(str(path), "rb") as wav:
+        n_channels = wav.getnchannels()
+        rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+    data = np.frombuffer(frames, dtype=np.int16)
+    if n_channels > 1:
+        data = data.reshape(-1, n_channels).mean(axis=1).astype(np.int16)
+    return data, rate
 
 
 def list_mics() -> list[tuple[int, str]]:
     """Return [(device_index, name)] for input-capable devices."""
-    import sounddevice as sd
+    sd = _sounddevice()
     out = []
     for i, d in enumerate(sd.query_devices()):
         if d.get("max_input_channels", 0) > 0:
@@ -29,7 +65,7 @@ def list_mics() -> list[tuple[int, str]]:
 
 def default_mic() -> int | None:
     """System default input device index, or None."""
-    import sounddevice as sd
+    sd = _sounddevice()
     try:
         dev = sd.default.device[0]
         return int(dev) if dev is not None and dev >= 0 else None
@@ -38,19 +74,32 @@ def default_mic() -> int | None:
 
 
 def play_wav(path: str | Path, blocking: bool = True) -> None:
-    """Play a WAV file through default speakers. Blocking by default."""
-    import winsound
-    flags = winsound.SND_FILENAME
-    if not blocking:
-        flags |= winsound.SND_ASYNC
+    """Play a WAV file through default speakers. Blocking by default.
 
-    winsound.PlaySound(str(path), flags)
+    Non-blocking playback can be cut with stop_playback().
+    """
+    if is_windows():
+        import winsound
+        flags = winsound.SND_FILENAME
+        if not blocking:
+            flags |= winsound.SND_ASYNC
+
+        winsound.PlaySound(str(path), flags)
+        return
+    sd = _sounddevice()
+    data, rate = _read_wav_mono(path)
+    sd.play(data, rate)
+    if blocking:
+        sd.wait()
 
 
 def stop_playback() -> None:
     """Stop any async playback."""
-    import winsound
-    winsound.PlaySound(None, winsound.SND_PURGE)
+    if is_windows():
+        import winsound
+        winsound.PlaySound(None, winsound.SND_PURGE)
+        return
+    _sounddevice().stop()
 
 
 class MicRecorder:
@@ -73,6 +122,7 @@ class MicRecorder:
     def start(self, path: str | Path) -> Path:
         if self._thread is not None:
             raise RuntimeError("mic already recording — stop first")
+        _sounddevice()  # fail fast with an install hint, before threading
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._frames = []
@@ -82,8 +132,8 @@ class MicRecorder:
         return self.path
 
     def _run(self):
-        import sounddevice as sd
         try:
+            sd = _sounddevice()
             started = time.monotonic()
             speech_started = False
             silent_since: float | None = None

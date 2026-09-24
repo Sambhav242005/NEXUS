@@ -1,0 +1,33 @@
+# NEXUS dependencies. Source of truth for version floors: pyproject.toml.
+# Setup (Windows / Linux):
+#   python -m venv .venv
+#   .venv\Scripts\activate          (Windows)
+#   source .venv/bin/activate       (Linux)
+#   python -m pip install -r requirements.txt
+#   python -m nexus.main --mode text
+#
+# Notes:
+# - The last line installs this project itself (editable).
+# - torch defaults to the small CPU wheel so install stays light
+#   everywhere. For NVIDIA CUDA instead, reinstall torch per
+#   https://pytorch.org/get-started/local/ after this file.
+# - Linux voice (mic) also needs: sudo apt install libportaudio2
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+pydantic>=2.0
+pyyaml>=6.0
+Pillow>=10.0
+pytest>=8.0
+numpy>=1.26
+sounddevice>=0.5
+soundfile>=0.12
+transformers>=4.45
+torch==2.14.0+cpu
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+websockets>=13
+laya>=0.1.0
+
+-e .

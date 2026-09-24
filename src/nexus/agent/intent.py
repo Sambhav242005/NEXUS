@@ -87,6 +87,8 @@ def repair_intent_plan(request: str, steps: list[IntentStep]) -> list[IntentStep
 
 
 class OllamaIntentRouter:
+    provider = "ollama"
+
     def __init__(self, model: str = "gemma3:1b", host: str = "http://127.0.0.1:11434",
                  timeout: float = 30.0, think: bool = False):
         self.model, self.host, self.timeout, self.think = model, host.rstrip("/"), timeout, think
@@ -126,3 +128,95 @@ class OllamaIntentRouter:
             raise RuntimeError(f"cannot reach Ollama for intent routing: {exc}") from exc
         answer = body.get("message", {}).get("content", "").strip()
         return repair_intent_plan(task, parse_intent_plan(answer))
+
+
+class OpenAIIntentRouter:
+    """Router for any OpenAI-compatible /chat/completions endpoint.
+
+    Works with OpenAI, Azure OpenAI, LM Studio, vLLM, LiteLLM, etc.
+    API key is read from the OPENAI_API_KEY env var when not given explicitly.
+    """
+    provider = "openai"
+
+    def __init__(self, model: str, base_url: str = "https://api.openai.com/v1",
+                 api_key: str | None = None, timeout: float = 30.0,
+                 temperature: float = 0.0):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.timeout = timeout
+        self.temperature = temperature
+
+    def classify(self, task: str) -> str:
+        steps = self.plan(task)
+        if steps:
+            if steps[0].kind == "open_app":
+                return "open_app"
+            if any(step.kind == "run_command" for step in steps):
+                return "shell_task"
+            if steps[0].kind == "computer_task":
+                return "computer_task"
+        return "clarify"
+
+    def plan(self, task: str) -> list[IntentStep]:
+        prompt = (
+            "Convert the request into a short sequence of intent lines. Output only lines using these forms:\n"
+            "open_app: application name\nrun_command: exact command text\n"
+            "computer_task: short GUI goal\nclarify: question\n"
+            "Replace every placeholder with the actual value from the request. "
+            "Do not output JSON, bullets, explanations, coordinates, or alternate commands. "
+            "Preserve command text after run_command exactly.\n"
+            f"Request: {task}"
+        )
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+            "max_tokens": 512,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except TimeoutError as exc:
+            raise RuntimeError(f"intent model {self.model} timed out") from exc
+        except (URLError, HTTPError) as exc:
+            raise RuntimeError(f"cannot reach {self.base_url} for intent routing: {exc}") from exc
+        answer = body["choices"][0]["message"]["content"].strip()
+        return repair_intent_plan(task, parse_intent_plan(answer))
+
+
+def build_intent_router(models_cfg: dict):
+    """Build the intent router from the models.intent config section.
+
+    provider: ollama (local) | openai (any OpenAI-compatible endpoint).
+    """
+    cfg = models_cfg.get("intent", {})
+    provider = cfg.get("provider", "ollama")
+    model = cfg.get("name", "gemma3:1b")
+    timeout = float(cfg.get("timeout", 30.0))
+
+    if provider == "openai":
+        return OpenAIIntentRouter(
+            model=model,
+            base_url=cfg.get("base_url", "https://api.openai.com/v1"),
+            api_key=cfg.get("api_key"),  # falls back to OPENAI_API_KEY env
+            timeout=timeout,
+            temperature=float(cfg.get("temperature", 0.0)),
+        )
+    if provider == "ollama":
+        return OllamaIntentRouter(
+            model=model,
+            host=cfg.get("host", "http://127.0.0.1:11434"),
+            timeout=timeout,
+            think=bool(cfg.get("think", False)),
+        )
+    raise ValueError(f"unknown intent provider: {provider!r} (expected 'ollama' or 'openai')")

@@ -1,6 +1,24 @@
 models:
-  intent: {provider: ollama, name: "minicpm-v4.6", think: false, device: cpu}
-  semif: {provider: semif, model: Qwen/Qwen3.5-4B, revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a, backend: mock}
+  intent:
+    provider: ollama              # ollama (local) | openai (any OpenAI-compatible endpoint)
+    name: "gemma3:1b"            # model name for either provider
+    think: false
+    device: cpu
+    timeout: 30.0
+    # openai provider settings (ignored when provider: ollama):
+    base_url: "https://api.openai.com/v1"   # or Azure/LM Studio/vLLM/LiteLLM base URL
+    temperature: 0
+    # api_key comes from OPENAI_API_KEY env var (never put secrets in YAML)
+    # ollama provider settings (ignored when provider: openai):
+    host: "http://127.0.0.1:11434"
+  semif: {provider: laya, model: convaiinnovations/laya, backend: laya}
   asr: {provider: whisper, model: "openai/whisper-large-v3-turbo", device: cuda}
   tts: {provider: kittentts, model: "KittenML/kitten-tts-mini-0.8", voice: Jasper, speed: 1.0, device: cpu}
+  # Online / server alternatives (keys via env, never here):
+  # asr: {provider: openai, model: "whisper-1", base_url: "https://api.openai.com/v1", api_key_env: OPENAI_API_KEY, language: en}
+  # asr: {provider: elevenlabs, base_url: "https://api.elevenlabs.io/v1", api_key_env: ELEVENLABS_API_KEY, language: en}
+  # asr: {provider: server, server_url: "http://127.0.0.1:8001"}
+  # tts: {provider: openai, model: "gpt-4o-mini-tts", voice: coral, base_url: "https://api.openai.com/v1", api_key_env: OPENAI_API_KEY}
+  # tts: {provider: elevenlabs, voice_id: "ELEVEN_VOICE_ID", base_url: "https://api.elevenlabs.io/v1", api_key_env: ELEVENLABS_API_KEY}
+  # tts: {provider: server, server_url: "http://127.0.0.1:8001", voice: Jasper, speed: 1.0}
   vision: {provider: uia, model: none}

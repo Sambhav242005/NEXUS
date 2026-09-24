@@ -47,7 +47,7 @@ class SemanticDecisionEngine(Protocol):
 class SemIfConfig(BaseModel):
     model: str = "Qwen/Qwen3.5-4B"
     revision: str = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
-    backend: str = "mock"  # mock | torch-direct | subprocess-cli
+    backend: str = "mock"  # mock | torch-direct | subprocess-cli | laya
     timeout_seconds: float = 30.0
     max_tokens: int = 4096
 
@@ -104,7 +104,8 @@ class RealSemIfAdapter:
     def __init__(self, config: SemIfConfig | None = None, scorer: ScorerFn | None = None):
         self.config = config or SemIfConfig()
         self.scorer = scorer or mock_scorer_first_wins
-        if _semif_core is None:
+        self._use_core = self.config.backend != "mock" and self.config.backend != "laya"
+        if self._use_core and _semif_core is None:
             raise RuntimeError(f"Real SemIf core unavailable: {SEMIF_IMPORT_ERROR}")
 
     def decide(self, state: dict | str | list, question: str,
@@ -116,7 +117,8 @@ class RealSemIfAdapter:
             "options": [{"id": o.id, "description": o.description} for o in options],
         }
         # Real validation — raises ValueError on malformed rows.
-        _semif_core.validate_row(row)
+        if self._use_core:
+            _semif_core.validate_row(row)
         started = time.perf_counter()
         out = self.scorer(row)
         total = time.perf_counter() - started
@@ -129,7 +131,7 @@ class RealSemIfAdapter:
         winner = option_ids[int(max(range(len(probs)), key=lambda i: probs[i]))]
         # Real prompt hash when available (auditable).
         prompt_hash = out.get("prompt_sha256")
-        if prompt_hash is None:
+        if prompt_hash is None and self._use_core:
             try:
                 msgs = _semif_core.direct_messages(row)
                 prompt_hash = _semif_core.digest(msgs[1]["content"] + msgs[0]["content"])
@@ -156,4 +158,53 @@ def real_direct_scorer(model, tokenizer, metadata: dict, max_tokens: int = 4096)
 
     def _score(row: dict) -> dict:
         return _direct.score(model, tokenizer, row, metadata, max_tokens)
+    return _score
+
+
+def laya_scorer(agent) -> ScorerFn:
+    """Build a ScorerFn wrapping a loaded Laya agent.
+
+    Converts SemIf row {id,state,question,options} into a Laya choice question,
+    runs a single forward pass, and maps the result back to SemIf format.
+    """
+    def _score(row: dict) -> dict:
+        state_text = row["state"]
+        if isinstance(state_text, dict):
+            state_text = str(state_text)
+        elif isinstance(state_text, list):
+            state_text = " ".join(str(x) for x in state_text)
+
+        criteria = {o["id"]: o.get("description", o["id"]) for o in row["options"]}
+        questions = {
+            "decision": {
+                "type": "choice",
+                "instructions": row["question"],
+                "criteria": criteria,
+            }
+        }
+        result = agent.predict(state_text, questions)
+        answers = result.get("answers", {})
+        decision_answer = answers.get("decision", {})
+
+        choice_id = decision_answer.get("choice", row["options"][0]["id"])
+        choice_confidence = float(decision_answer.get("confidence", 0.5))
+
+        option_ids = [o["id"] for o in row["options"]]
+        probabilities = []
+        for oid in option_ids:
+            if oid == choice_id:
+                probabilities.append(choice_confidence)
+            else:
+                probabilities.append((1.0 - choice_confidence) / max(1, len(option_ids) - 1))
+
+        total = sum(probabilities) or 1.0
+        probabilities = [p / total for p in probabilities]
+
+        return {
+            "option_ids": option_ids,
+            "probabilities": probabilities,
+            "option_logits": [2.0 if oid == choice_id else 0.0 for oid in option_ids],
+            "prompt_version": "laya-v1",
+            "forward_seconds": result.get("routing", {}).get("latency_ms", 0) / 1000.0,
+        }
     return _score

@@ -6,3 +6,5 @@ voice:
   silence_timeout: 1.0
   max_duration: 60
   speech_threshold: 500
+  max_pending: 5
+  barge_in: {enabled: true, threshold: 1500.0, min_speech_ms: 300}

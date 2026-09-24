@@ -43,6 +43,24 @@ class SpeechSynthesizer(Protocol):
 
 Local provider. Configurable voice/model. Playback queue. Interruptible. Graceful errors. No mandatory external API. Independent from planner.
 
+### Barge-in
+
+Reply/ack playback is async with a mic + Enter monitor. Sustained mic
+level above `barge_in.threshold` for `barge_in.min_speech_ms` (or Enter)
+purges playback; the loop records fresh immediately (cut speech is not
+captured). Monitor failure never truncates a reply — it plays through.
+
+### Voice server transports
+
+REST (file): `POST /v1/stt` multipart 16 kHz mono WAV → `{"text"}`;
+`POST /v1/tts` JSON `{text, voice?, speed?}` → `audio/wav`; `GET /health`.
+
+WebSocket (streaming): `/ws/stt` binary int16 16 kHz mono frames in →
+`speech_started` event + `final` transcript (server VAD auto-endpoints
+after trailing silence; `stop`/`abort` controls; multi-utterance per
+connection); `/ws/tts` JSON `{text, voice?, speed?}` in → `meta` +
+binary chunks + `done`. Same local backends; separately hostable.
+
 ## 4. Computer-use
 
 Platform abstraction. Capabilities: screenshot, move, click, double-click, type, keypress, hotkey, scroll, screen dims, active window (where supported).
