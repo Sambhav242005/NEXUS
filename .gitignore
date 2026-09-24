@@ -15,6 +15,12 @@ venv/
 .ruff_cache/
 .pytest_cache/
 .pytest-temp/
+.hypothesis/
+.tox/
+.cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Secrets / env
 .env
@@ -23,6 +29,8 @@ venv/
 
 # Runtime artifacts (recordings, screenshots, logs)
 recordings/
+logs/
+screenshots/
 *.log
 *.wav
 *.png.tmp
